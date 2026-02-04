@@ -230,20 +230,20 @@ class LinkedInCompanyScraper:
             except Exception:
                 continue
 
-        # Check for CAPTCHA
-        captcha_selectors = [
-            '#captcha',
-            '.captcha',
-            'iframe[src*="captcha"]',
+        # Check for CAPTCHA - only very specific selectors to avoid false positives
+        # LinkedIn's actual challenge pages have specific indicators
+        page_content = await self.page.content()
+        captcha_indicators = [
+            'challenge/verify' in self.page.url,
+            '/checkpoint/' in self.page.url,
+            'captcha-internal' in page_content.lower(),
+            'security verification' in page_content.lower(),
         ]
-        for selector in captcha_selectors:
-            try:
-                if await self.page.query_selector(selector):
-                    checks['blocked'] = True
-                    checks['message'] = "CAPTCHA detected - manual intervention required"
-                    return checks
-            except Exception:
-                continue
+
+        if any(captcha_indicators):
+            checks['blocked'] = True
+            checks['message'] = "Security challenge detected"
+            return checks
 
         return checks
 
@@ -297,8 +297,17 @@ class LinkedInCompanyScraper:
 
             # Check for blocks
             block_status = await self._check_for_blocks()
-            if block_status['auth_wall'] or block_status['blocked'] or block_status['commercial_limit']:
+            if block_status['auth_wall'] or block_status['blocked']:
                 print(f"[Page {page_num}] WARNING: {block_status['message']}")
+                print("[!] Please solve any challenge in the browser window, then press ENTER to continue...")
+                await self.page.screenshot(path=f'debug_page_{page_num}.png')
+                input()  # Wait for user to solve challenge
+                # Re-navigate after solving
+                await self.page.goto(url, wait_until='domcontentloaded', timeout=30000)
+                await self._random_delay(2, 4)
+            elif block_status['commercial_limit']:
+                print(f"[Page {page_num}] WARNING: {block_status['message']}")
+                print("[!] Commercial limit reached. Consider waiting 24h or using LinkedIn Premium.")
                 return []
 
             # Scroll to trigger lazy loading
