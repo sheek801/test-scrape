@@ -60,42 +60,6 @@ class LinkedInCompanyScraper:
     BASE_URL = "https://www.linkedin.com/search/results/companies/"
     SEARCH_PARAMS = "?keywords=ieee&origin=SWITCH_SEARCH_VERTICAL&spellCorrectionEnabled=true"
 
-    # Multiple selector strategies - LinkedIn changes DOM frequently
-    SELECTORS = {
-        # Primary selectors (as of late 2024/early 2025)
-        'result_container': [
-            'li.reusable-search__result-container',
-            'div.search-results-container li',
-            '[data-chameleon-result-urn]',
-            '.entity-result',
-        ],
-        'company_name': [
-            '.entity-result__title-text a span[aria-hidden="true"]',
-            '.entity-result__title-text a span:first-child',
-            '.app-aware-link span[aria-hidden="true"]',
-            'a[data-test-app-aware-link] span',
-        ],
-        'company_link': [
-            '.entity-result__title-text a',
-            'a.app-aware-link[href*="/company/"]',
-            '.entity-result a[href*="/company/"]',
-        ],
-        'subtitle': [
-            '.entity-result__primary-subtitle',
-            '.entity-result__summary',
-            '.linked-area .t-14',
-        ],
-        'secondary_subtitle': [
-            '.entity-result__secondary-subtitle',
-            '.entity-result__caption',
-        ],
-        'followers': [
-            '.entity-result__secondary-subtitle',
-            '.entity-result__caption',
-            'span:has-text("follower")',
-        ],
-    }
-
     def __init__(self, headless: bool = False):
         self.headless = headless
         self.results = []
@@ -124,54 +88,33 @@ class LinkedInCompanyScraper:
         await self.page.evaluate('window.scrollTo(0, document.body.scrollHeight)')
         await asyncio.sleep(random.uniform(1.0, 2.0))
 
-    async def _try_selectors(self, selectors: list, parent=None) -> list:
-        """Try multiple selectors and return first successful result."""
-        target = parent if parent else self.page
+    async def _get_result_containers(self) -> list:
+        """Get all search result containers using multiple selector strategies."""
+        selectors = [
+            'li.reusable-search__result-container',
+            '.search-results-container li.reusable-search__result-container',
+            'ul.reusable-search__entity-result-list > li',
+            '[data-chameleon-result-urn]',
+        ]
         for selector in selectors:
             try:
-                elements = await target.query_selector_all(selector)
+                elements = await self.page.query_selector_all(selector)
                 if elements:
                     return elements
             except Exception:
                 continue
         return []
 
-    async def _try_selector_single(self, selectors: list, parent=None) -> any:
-        """Try multiple selectors and return first match."""
-        target = parent if parent else self.page
-        for selector in selectors:
-            try:
-                element = await target.query_selector(selector)
-                if element:
-                    return element
-            except Exception:
-                continue
-        return None
-
-    async def _extract_text(self, element, selectors: list) -> str:
-        """Extract text from element using multiple selector strategies."""
-        el = await self._try_selector_single(selectors, element)
-        if el:
-            text = await el.text_content()
-            return text.strip() if text else ""
-        return ""
-
-    async def _extract_href(self, element, selectors: list) -> str:
-        """Extract href from element using multiple selector strategies."""
-        el = await self._try_selector_single(selectors, element)
-        if el:
-            href = await el.get_attribute('href')
-            if href:
-                # Clean up the URL
-                if href.startswith('/'):
-                    return f"https://www.linkedin.com{href.split('?')[0]}"
-                return href.split('?')[0]
-        return ""
-
     async def _wait_for_results(self) -> bool:
         """Wait for search results to load with multiple strategies."""
+        result_selectors = [
+            'li.reusable-search__result-container',
+            '[data-chameleon-result-urn]',
+            '.entity-result',
+        ]
+
         # Strategy 1: Wait for any result container
-        for selector in self.SELECTORS['result_container']:
+        for selector in result_selectors:
             try:
                 await self.page.wait_for_selector(selector, timeout=10000)
                 return True
@@ -252,36 +195,74 @@ class LinkedInCompanyScraper:
         company = {
             'name': '',
             'url': '',
-            'subtitle': '',  # Usually industry/type
-            'followers': '',
+            'industry': '',
             'location': '',
+            'followers': '',
             'scraped_at': datetime.now().isoformat()
         }
 
-        # Extract company name
-        company['name'] = await self._extract_text(result_element, self.SELECTORS['company_name'])
+        # Get all text content for debugging
+        full_text = await result_element.text_content()
+        lines = [line.strip() for line in full_text.split('\n') if line.strip()]
 
-        # If name not found, try to get it from the link text
-        if not company['name']:
-            link_el = await self._try_selector_single(self.SELECTORS['company_link'], result_element)
-            if link_el:
-                text = await link_el.text_content()
-                company['name'] = text.strip() if text else ""
+        # Strategy 1: Find the company link (href contains /company/)
+        company_link = await result_element.query_selector('a[href*="/company/"]')
+        if company_link:
+            href = await company_link.get_attribute('href')
+            if href:
+                company['url'] = f"https://www.linkedin.com{href.split('?')[0]}" if href.startswith('/') else href.split('?')[0]
 
-        # Extract company URL
-        company['url'] = await self._extract_href(result_element, self.SELECTORS['company_link'])
-
-        # Extract subtitle (industry/type)
-        company['subtitle'] = await self._extract_text(result_element, self.SELECTORS['subtitle'])
-
-        # Extract secondary subtitle (often contains followers/location)
-        secondary = await self._extract_text(result_element, self.SELECTORS['secondary_subtitle'])
-        if secondary:
-            # Parse followers if present
-            if 'follower' in secondary.lower():
-                company['followers'] = secondary
+            # Get company name from the link's visible text
+            # Look for span with aria-hidden="true" which contains the visible name
+            name_span = await company_link.query_selector('span[aria-hidden="true"]')
+            if name_span:
+                company['name'] = (await name_span.text_content()).strip()
             else:
-                company['location'] = secondary
+                # Fallback: get direct text from link
+                link_text = await company_link.text_content()
+                if link_text:
+                    company['name'] = link_text.strip().split('\n')[0].strip()
+
+        # Strategy 2: Parse from text lines if link method failed
+        if not company['name'] and lines:
+            # First meaningful line is usually the company name
+            # Skip lines that look like insights ("X connections", "X people from")
+            for line in lines:
+                if not any(skip in line.lower() for skip in ['connection', 'people from', 'hired here', 'follower', 'following']):
+                    if not any(char in line for char in ['•', '·']):  # Skip subtitle lines
+                        company['name'] = line
+                        break
+
+        # Extract industry and location from subtitle (format: "Industry • Location")
+        subtitle_el = await result_element.query_selector('.entity-result__primary-subtitle')
+        if subtitle_el:
+            subtitle_text = await subtitle_el.text_content()
+            if subtitle_text:
+                subtitle_text = subtitle_text.strip()
+                if '•' in subtitle_text:
+                    parts = subtitle_text.split('•')
+                    company['industry'] = parts[0].strip()
+                    company['location'] = parts[1].strip() if len(parts) > 1 else ''
+                elif '·' in subtitle_text:
+                    parts = subtitle_text.split('·')
+                    company['industry'] = parts[0].strip()
+                    company['location'] = parts[1].strip() if len(parts) > 1 else ''
+                else:
+                    company['industry'] = subtitle_text
+
+        # Extract followers - look for text containing "follower"
+        secondary_el = await result_element.query_selector('.entity-result__secondary-subtitle')
+        if secondary_el:
+            secondary_text = await secondary_el.text_content()
+            if secondary_text and 'follower' in secondary_text.lower():
+                company['followers'] = secondary_text.strip()
+
+        # Fallback: search all text for follower count
+        if not company['followers']:
+            for line in lines:
+                if 'follower' in line.lower():
+                    company['followers'] = line.strip()
+                    break
 
         return company
 
@@ -322,7 +303,7 @@ class LinkedInCompanyScraper:
                 return []
 
             # Find all result containers
-            results = await self._try_selectors(self.SELECTORS['result_container'])
+            results = await self._get_result_containers()
             print(f"[Page {page_num}] Found {len(results)} result containers")
 
             if not results:
