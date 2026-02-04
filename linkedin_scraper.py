@@ -250,6 +250,17 @@ class LinkedInCompanyScraper:
                 else:
                     company['industry'] = subtitle_text
 
+        # Fallback: parse industry/location from text lines if selector failed
+        if not company['industry']:
+            for line in lines:
+                if '•' in line or '·' in line:
+                    # This is likely the subtitle line
+                    sep = '•' if '•' in line else '·'
+                    parts = line.split(sep)
+                    company['industry'] = parts[0].strip()
+                    company['location'] = parts[1].strip() if len(parts) > 1 else ''
+                    break
+
         # Extract followers - look for text containing "follower"
         secondary_el = await result_element.query_selector('.entity-result__secondary-subtitle')
         if secondary_el:
