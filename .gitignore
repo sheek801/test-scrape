@@ -1,0 +1,25 @@
+# Credentials - NEVER commit these
+auth.json
+
+# Output files
+*.csv
+*.json
+!package*.json
+
+# Debug screenshots
+debug_*.png
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+venv/
+env/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
