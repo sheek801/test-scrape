@@ -1,25 +1,15 @@
-# Credentials - NEVER commit these
-auth.json
-
-# Output files
-*.csv
-*.json
-!package*.json
-
-# Debug screenshots
-debug_*.png
-
-# Python
+.env
 __pycache__/
-*.py[cod]
-*$py.class
-.Python
-venv/
-env/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
 .venv/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
+venv/
+*.log
+data/cache/
+data/raw/
+*.csv
+*.xlsx
+.DS_Store
